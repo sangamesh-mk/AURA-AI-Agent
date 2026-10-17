@@ -14,3 +14,4 @@ for Homingo Hack Days 2026.
 ## Run locally
 
     python main.py
+# AURA-AI-Agent
