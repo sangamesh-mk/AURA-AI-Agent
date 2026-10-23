@@ -16,3 +16,5 @@ htmlcov/
 # Editors
 .vscode/
 .idea/
+
+aura_memory.json

@@ -1,7 +1,7 @@
 
 import ast
 import operator
-
+from datetime import datetime
 
 # Only these arithmetic operations are permitted.
 _OPERATORS = {
@@ -19,6 +19,7 @@ _OPERATORS = {
 
 def calculate(expression: str):
     """Safely evaluate a basic arithmetic expression."""
+    print(f"\n[TOOL EXECUTED] calculate(expression={expression!r})")
 
     try:
         tree = ast.parse(expression, mode="eval")
@@ -27,7 +28,10 @@ def calculate(expression: str):
             if isinstance(node, ast.Expression):
                 return evaluate(node.body)
 
-            if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            if (
+                isinstance(node, ast.Constant)
+                and type(node.value) in (int, float)
+            ):
                 return node.value
 
             if isinstance(node, ast.BinOp) and type(node.op) in _OPERATORS:
@@ -51,5 +55,20 @@ def calculate(expression: str):
 
         return evaluate(tree)
 
-    except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError) as error:
+    except (
+        SyntaxError,
+        ValueError,
+        TypeError,
+        ZeroDivisionError,
+        OverflowError,
+    ) as error:
         return f"Calculation error: {error}"
+
+
+def get_current_datetime():
+    """Return the computer's current local date and time."""
+    now = datetime.now().astimezone()
+    result = now.strftime("%A, %d %B %Y, %I:%M:%S %p %Z")
+
+    print(f"\n[TOOL EXECUTED] get_current_datetime()")
+    return result
