@@ -1,6 +1,11 @@
 import streamlit as st
 from datetime import datetime
 import re
+import os
+from dotenv import load_dotenv
+from google import genai
+from google.genai import types
+
 
 from tools import calculate, get_current_datetime
 from agent_engine import AgentEngine
@@ -12,6 +17,16 @@ from memory import (
     get_memory,
     detect_memory_request,
 )
+from aura_service import AuraService
+
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    gemini_client = None
 
 st.set_page_config(
     page_title="AURA | Personal AI Agent",
@@ -23,7 +38,7 @@ st.set_page_config(
 # -------------------- AURA AGENT ENGINE --------------------
 aura_engine = AgentEngine([calculate, get_current_datetime])
 aura_runner = AgentRunner(aura_engine)
-
+aura_service = AuraService()
 
 def execute_supported_task(goal: str) -> dict:
     """Run a supported local tool task; do not claim unsupported work succeeded."""
@@ -72,6 +87,78 @@ def execute_supported_task(goal: str) -> dict:
         ),
         "steps": [],
     }
+
+def offline_response(prompt: str) -> str:
+    """Handle common requests locally without using an LLM API."""
+    text = prompt.strip()
+    lowered = text.casefold()
+
+    # Greetings
+    if lowered in {
+        "hi", "hello", "hey", "hii", "helo",
+        "good morning", "good afternoon", "good evening",
+    }:
+        return (
+            "Hello! I'm AURA, your personal AI assistant. "
+            "I'm currently in offline mode, but I can still help "
+            "with saved memories, calculations, and date/time."
+        )
+
+    # Recall a saved memory
+    if lowered.startswith("recall "):
+        key = text[7:].strip()
+        if not key:
+            return "Please specify which memory you want me to recall."
+        return get_memory(key)
+
+    # Current date/time
+    if any(phrase in lowered for phrase in (
+        "current date", "current time", "date and time",
+        "what time is it", "today's date", "todays date",
+        "what is the date", "what day is it",
+    )):
+        result = get_current_datetime()
+        return str(result)
+
+    # Arithmetic requests
+    match = re.match(
+        r"^(?:(?:please\s+)?(?:calculate|compute|solve)\s+|"
+        r"(?:what is|what's)\s+)(.+?)\s*[?.!]*$",
+        text,
+        re.IGNORECASE,
+    )
+
+    if match:
+        expression = (
+            match.group(1)
+            .replace("×", "*")
+            .replace("÷", "/")
+            .replace("−", "-")
+            .replace("–", "-")
+        )
+
+        if re.fullmatch(r"[0-9\s()+*/%.\-]+", expression):
+            result = calculate(expression)
+            return f"The result is: {result}"
+
+    # Simple offline educational responses
+    if lowered in {"what is ai", "what is artificial intelligence",
+                   "explain ai", "explain artificial intelligence"}:
+        return (
+            "Artificial Intelligence (AI) is technology that enables "
+            "computers to perform tasks that usually require human "
+            "intelligence, such as understanding language, recognizing "
+            "images, solving problems, and making predictions. "
+            "I'm in offline mode, so my explanations are limited to "
+            "built-in responses."
+        )
+
+    return (
+        "I'm currently in offline mode because the AI service may be "
+        "unavailable. I can greet you, recall saved memories, perform "
+        "basic calculations, and provide the current date and time. "
+        "For other questions, I'll need the AI service to be available."
+    )
 
 
 # -------------------- THEME --------------------
@@ -393,12 +480,19 @@ st.markdown(
         box-shadow: 0 2px 8px rgba(24, 34, 48, 0.02);
     }
 
-    [data-testid="stChatInput"] {
-        border-color: #E7EAF0;
-        background: #FFFFFF;
-        border-radius: 14px;
-    }
+   /* Keep the chat input in the normal page flow */
+[data-testid="stChatInput"] {
+    position: relative !important;
+    bottom: auto !important;
+    border-color: #E7EAF0;
+    background: #FFFFFF;
+    border-radius: 14px;
+}
 
+[data-testid="stBottom"] {
+    position: relative !important;
+    bottom: auto !important;
+}
     input, textarea, [data-baseweb="select"] > div {
         border-radius: 10px !important;
     }
@@ -615,47 +709,62 @@ if page == "Dashboard":
                 st.session_state["navigation_target"] = "Task Center"
                 st.rerun()
 
+
 # -------------------- AI CHAT --------------------
 elif page == "AI Chat":
-    st.markdown('<div class="eyebrow">AURA WORKSPACE</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="eyebrow">AURA WORKSPACE</div>',
+        unsafe_allow_html=True
+    )
     st.title("AI Chat")
     st.caption("A focused place to work through your ideas with AURA.")
 
+    # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    prompt = st.chat_input("Message AURA…")
-
-    if prompt:
-        st.session_state.messages.append(
-            {"role": "user", "content": prompt}
+    # Normal input field (not pinned to the bottom)
+   
+    with st.form("aura_chat_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "Message AURA",
+            placeholder="Ask AURA anything..."
+        )
+        send = st.form_submit_button(
+            "➤ Send",
+            use_container_width=True
         )
 
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        memory_request = detect_memory_request(prompt)
-
-        if memory_request:
-            key, value = memory_request
-            response_text = save_memory(key, value)
+    if send:
+        if not prompt.strip():
+            st.warning("Please enter a message before sending.")
         else:
-            response_text = (
-                "Your message has been captured in this session. "
-                "The live AI reasoning engine is not connected yet, so I haven't "
-                "processed this request with a language model."
+            prompt = prompt.strip()
+
+            st.session_state.messages.append(
+                {"role": "user", "content": prompt}
             )
 
-        with st.chat_message("assistant"):
-            if memory_request:
-                st.success(response_text)
-            else:
-                st.info(response_text)
+            with st.chat_message("user"):
+                st.markdown(prompt)
 
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response_text}
-        )
+            with st.chat_message("assistant"):
+                with st.spinner("AURA is thinking..."):
+                    response_text = aura_service.respond(
+    prompt,
+    history=st.session_state.messages[:-1],
+)
+
+                st.markdown(response_text)
+
+            st.session_state.messages.append(
+                {"role": "assistant", "content": response_text}
+            )
+
+            st.rerun()
+
+        
 # -------------------- TASK CENTER --------------------
 elif page == "Task Center":
     st.markdown('<div class="eyebrow">PLAN & ORGANIZE</div>', unsafe_allow_html=True)
@@ -880,12 +989,33 @@ elif page == "System Status":
             st.divider()
 
 # -------------------- FOOTER --------------------
-st.markdown(
-    """
-    <div class="footer">
-        AURA · Personal AI Agent &nbsp; · &nbsp; Orange / White Edition
-        <br>Interface prototype — agent capabilities are being connected progressively.
+
+st.html("""
+<div style="
+    margin-top: 40px;
+    padding: 22px 10px;
+    text-align: center;
+    border-top: 1px solid #E5E7EB;
+    color: #6B7280;
+    font-size: 13px;
+">
+    <div style="
+        color: #F59E0B;
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: 2px;
+    ">AURA</div>
+
+    <div style="margin-top: 6px;">
+        Personal AI Agent
     </div>
-    """,
-    unsafe_allow_html=True,
-)
+
+    <div style="margin-top: 14px; color: #374151;">
+        © 2026 Sangamesh MK. All Rights Reserved.
+    </div>
+
+    <div style="margin-top: 5px; font-size: 12px;">
+        Designed &amp; Developed by Sangamesh M Kuri
+    </div>
+</div>
+""")
